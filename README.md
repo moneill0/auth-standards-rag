@@ -50,6 +50,35 @@ This starter uses keyword/full-text ranking, not embeddings. Treat results as
 retrieval evidence rather than a complete compliance answer, and check the
 linked standard text for normative requirements.
 
+## Generate an answer
+
+The default is a fully local Ollama model:
+
+```bash
+ollama pull llama3.2:3b
+ollama serve
+python -m auth_standards_rag answer "Why should clients use PKCE?" --top-k 5
+```
+
+Set `OLLAMA_MODEL` to use another installed Ollama model or `OLLAMA_HOST` for
+another local Ollama endpoint:
+
+```bash
+export OLLAMA_MODEL="qwen2.5:7b"
+export OLLAMA_HOST="http://localhost:11434"
+```
+
+The answer command first retrieves passages using the existing local index. If
+no passage exceeds `--min-score` (default `0.0`), it prints the exact abstention
+`not stated in the indexed documents` and does not call a model. Otherwise, it
+sends the question and numbered passages to the selected model and requires
+citations such as `[1]`. It rejects answers containing no valid citation or
+citations outside the retrieved passage list and abstains.
+
+No API key is needed with the default Ollama provider. Ollama and the selected
+model must be installed and running. Search and the test suite work even when
+no local or hosted model is available. No answer-generation SDK is required.
+
 ## Use search from an AI assistant with MCP
 
 Install the MCP server dependency in the Python environment that the assistant

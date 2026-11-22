@@ -396,6 +396,66 @@ def build_index(
     return counts
 
 
+def search_docs_with_scores(
+    query: str,
+    top_k: int = 5,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> list[dict[str, str | float | None]]:
+    """Return matching passages with a positive BM25 relevance score."""
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string.")
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 10:
+        raise ValueError("top_k must be an integer from 1 to 10.")
+
+    terms = re.findall(r"[A-Za-z0-9]+", query)
+    if not terms:
+        raise ValueError("query must contain at least one searchable word or number.")
+    all_terms_query = " AND ".join(f'"{term}"' for term in terms)
+    any_terms_query = " OR ".join(f'"{term}"' for term in terms)
+
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Search index not found at {path}. Run `python -m auth_standards_rag index` first.")
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT source_name, source_url, source_version, fetched_at, content_sha256, "
+            "section_number, section_title, passage, -bm25(passages) "
+            "FROM passages WHERE passages MATCH ? ORDER BY bm25(passages) LIMIT ?",
+            (all_terms_query, top_k),
+        ).fetchall()
+        if not rows and all_terms_query != any_terms_query:
+            rows = connection.execute(
+                "SELECT source_name, source_url, source_version, fetched_at, content_sha256, "
+                "section_number, section_title, passage, -bm25(passages) "
+                "FROM passages WHERE passages MATCH ? ORDER BY bm25(passages) LIMIT ?",
+                (any_terms_query, top_k),
+            ).fetchall()
+    return [
+        {
+            "source_name": source_name,
+            "source_url": source_url,
+            "source_version": source_version,
+            "fetched_at": fetched_at,
+            "content_sha256": content_sha256,
+            "section_number": section_number,
+            "section_title": section_title,
+            "passage": passage,
+            "score": float(score),
+        }
+        for (
+            source_name,
+            source_url,
+            source_version,
+            fetched_at,
+            content_sha256,
+            section_number,
+            section_title,
+            passage,
+            score,
+        ) in rows
+    ]
+
+
 def search_docs(
     query: str,
     top_k: int = 5,
@@ -461,12 +521,20 @@ def main() -> None:
     search_parser = subparsers.add_parser("search", help="Search the local index.")
     search_parser.add_argument("query")
     search_parser.add_argument("--top-k", type=int, default=5)
+    answer_parser = subparsers.add_parser("answer", help="Answer a question from retrieved passages.")
+    answer_parser.add_argument("question")
+    answer_parser.add_argument("--top-k", type=int, default=5)
+    answer_parser.add_argument("--min-score", type=float, default=0.0)
     args = parser.parse_args()
 
     if args.command == "index":
         print(json.dumps(build_index(), indent=2))
-    else:
+    elif args.command == "search":
         print(json.dumps(search_docs(args.query, top_k=args.top_k), indent=2))
+    else:
+        from answer import answer_question
+
+        print(json.dumps(answer_question(args.question, top_k=args.top_k, min_score=args.min_score), indent=2))
 
 
 if __name__ == "__main__":

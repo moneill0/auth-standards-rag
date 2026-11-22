@@ -21,6 +21,7 @@ from auth_standards_rag import (
     search_docs,
 )
 from retrieval_eval import EvaluationCase, RelevantSection, evaluate_retrieval
+from answer import ABSTAIN_MESSAGE, answer_question, call_ollama_model, validate_citations
 
 
 class ChunkTextTests(unittest.TestCase):
@@ -155,6 +156,106 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(0.0, report["metrics"]["mean_reciprocal_rank_at_k"])
         with self.assertRaises(ValueError):
             evaluate_retrieval(cases=(), search=lambda query, top_k, db_path: [])
+
+
+class AnswerGenerationTests(unittest.TestCase):
+    def test_answer_defaults_to_ollama_when_no_provider_is_set(self) -> None:
+        passage = {
+            "source_name": "RFC Test", "source_url": "https://example.test",
+            "section_number": "2", "section_title": "PKCE",
+            "passage": "Use PKCE.", "score": 1.0,
+        }
+        with patch.dict(os.environ, {}, clear=False):
+            with patch("answer.call_ollama_model", return_value="Use PKCE [1].") as ollama:
+                result = answer_question(
+                    "Why use PKCE?",
+                    search=lambda query, top_k, db_path: [passage],
+                )
+
+        ollama.assert_called_once()
+        self.assertFalse(result["abstained"])
+        self.assertEqual([1], result["citations"])
+
+    def test_ollama_request_uses_local_api_and_returns_content(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b'{"message":{"content":"Use PKCE [1]."}}'
+
+        passage = {
+            "source_name": "RFC Test", "source_url": "https://example.test",
+            "section_number": "2", "section_title": "PKCE", "passage": "Use PKCE.",
+        }
+        with patch.dict(os.environ, {"OLLAMA_HOST": "http://localhost:11434", "OLLAMA_MODEL": "llama3.2:3b"}):
+            with patch("answer.urlopen", return_value=Response()) as mocked_urlopen:
+                answer = call_ollama_model("Why use PKCE?", [passage])
+
+        self.assertEqual("Use PKCE [1].", answer)
+        request = mocked_urlopen.call_args.args[0]
+        self.assertEqual("http://localhost:11434/api/chat", request.full_url)
+
+    def test_abstains_below_score_threshold_without_calling_model(self) -> None:
+        model_calls = []
+
+        def no_relevant_passages(query: str, top_k: int, db_path: str) -> list[dict[str, object]]:
+            return [{"source_name": "NIST", "section_number": "5", "section_title": "Risk", "passage": "text", "score": 0.1}]
+
+        result = answer_question(
+            "What is the answer?",
+            min_score=0.5,
+            search=no_relevant_passages,
+            model_call=lambda question, passages: model_calls.append(question) or "should not run",
+        )
+
+        self.assertTrue(result["abstained"])
+        self.assertEqual(ABSTAIN_MESSAGE, result["answer"])
+        self.assertEqual([], model_calls)
+
+    def test_mocked_model_answer_is_cited_to_retrieved_section(self) -> None:
+        passage = {
+            "source_name": "Proof Key for Code Exchange (PKCE)",
+            "source_url": "https://www.rfc-editor.org/rfc/rfc7636.txt",
+            "section_number": "4.6",
+            "section_title": "Server Verifies code_verifier",
+            "passage": "The server verifies the code verifier.",
+            "score": 2.5,
+        }
+
+        def relevant_search(query: str, top_k: int, db_path: str) -> list[dict[str, object]]:
+            return [passage]
+
+        result = answer_question(
+            "How does PKCE verification work?",
+            search=relevant_search,
+            model_call=lambda question, passages: "The server verifies the code verifier [1].",
+        )
+
+        self.assertFalse(result["abstained"])
+        self.assertEqual([1], result["citations"])
+        valid, numbers = validate_citations(result["answer"], result["passages"])
+        self.assertTrue(valid)
+        self.assertEqual([1], numbers)
+        self.assertEqual(passage["source_name"], result["passages"][0]["source_name"])
+
+    def test_rejects_answer_with_out_of_range_citation(self) -> None:
+        passage = {
+            "source_name": "NIST", "source_url": "https://example.test",
+            "section_number": "5", "section_title": "Risk",
+            "passage": "Text", "score": 1.0,
+        }
+        result = answer_question(
+            "What is the risk?",
+            search=lambda query, top_k, db_path: [passage],
+            model_call=lambda question, passages: "The answer is unsupported [2].",
+        )
+
+        self.assertTrue(result["abstained"])
+        self.assertEqual(ABSTAIN_MESSAGE, result["answer"])
 
 
 class MCPServerTests(unittest.TestCase):
