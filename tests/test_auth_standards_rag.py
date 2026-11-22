@@ -1,10 +1,17 @@
+import asyncio
+import os
+from pathlib import Path
+import sys
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from auth_standards_rag import (
     FetchedDocument,
+    ROOT,
     Section,
     Source,
     _parse_html_sections,
@@ -148,6 +155,45 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(0.0, report["metrics"]["mean_reciprocal_rank_at_k"])
         with self.assertRaises(ValueError):
             evaluate_retrieval(cases=(), search=lambda query, top_k, db_path: [])
+
+
+class MCPServerTests(unittest.TestCase):
+    def test_stdio_server_exposes_and_runs_search_docs(self) -> None:
+        source = Source("MCP Test Source", "https://example.test/mcp", "Test revision")
+        document = FetchedDocument(
+            (Section("2", "Token Security", "Protect OAuth access tokens from replay."),),
+            "2026-11-21T12:00:00+00:00",
+            "b" * 64,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "index.sqlite3"
+            with patch("auth_standards_rag.fetch_source", return_value=document):
+                build_index(db_path, [source])
+
+            async def call_tool() -> tuple[list[str], str]:
+                params = StdioServerParameters(
+                    command=sys.executable,
+                    args=[str(ROOT / "mcp_server.py")],
+                    cwd=str(ROOT),
+                    env={**os.environ, "AUTH_STANDARDS_DB": str(db_path)},
+                )
+                async with stdio_client(params) as (read_stream, write_stream):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        tools = await session.list_tools()
+                        result = await session.call_tool(
+                            "search_docs",
+                            {"query": "OAuth access tokens replay", "top_k": 3},
+                        )
+                        self.assertFalse(result.isError)
+                        return [tool.name for tool in tools.tools], result.content[0].text
+
+            tool_names, result_text = asyncio.run(call_tool())
+
+        self.assertEqual(["search_docs"], tool_names)
+        self.assertIn("MCP Test Source", result_text)
+        self.assertIn("Token Security", result_text)
 
 
 if __name__ == "__main__":

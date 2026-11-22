@@ -50,6 +50,28 @@ This starter uses keyword/full-text ranking, not embeddings. Treat results as
 retrieval evidence rather than a complete compliance answer, and check the
 linked standard text for normative requirements.
 
+## Use search from an AI assistant with MCP
+
+Install the MCP server dependency in the Python environment that the assistant
+will use to launch the server:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+In VS Code, open this folder as the workspace and start the
+`auth-standards-rag` MCP server from the MCP servers UI. The
+`.vscode/mcp.json` configuration launches `mcp_server.py` over stdio using
+`python3` from `PATH`; make sure that interpreter has the requirements
+installed. The server exposes one MCP tool, `search_docs`, which calls the
+existing local search function and returns its citation metadata. The index
+must already exist; build it with the index command above.
+
+For another MCP-compatible assistant, configure a stdio server with command
+`python3` and argument `/absolute/path/to/auth-standards-rag/mcp_server.py`,
+using the project directory as its working directory. Install `requirements.txt`
+in the Python environment used by that command.
+
 ## Evaluate retrieval
 
 ```bash
