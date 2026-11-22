@@ -50,6 +50,25 @@ This starter uses keyword/full-text ranking, not embeddings. Treat results as
 retrieval evidence rather than a complete compliance answer, and check the
 linked standard text for normative requirements.
 
+## Evaluate retrieval
+
+```bash
+python retrieval_eval.py --top-k 5
+```
+
+The evaluator runs a small hand-labeled benchmark in `retrieval_eval.py`.
+Expected results are source sections, not exact chunks, so multiple chunks
+from one section do not inflate scores. It reports hit rate@k, mean reciprocal
+rank@k, and mean recall@k, plus per-query results. Precision is omitted because
+the benchmark labels known relevant sections but does not claim to label every
+relevant section in the corpus. The labels are an initial, human-curated
+sample; expand and review them as the corpus and intended questions grow. These
+retrieval metrics do not measure answer correctness or citation faithfulness.
+
+Hit rate measures how often a query retrieves any expected section; reciprocal
+rank rewards finding one near the top; recall measures how many labeled
+sections were retrieved.
+
 ## Tests
 
 ```bash

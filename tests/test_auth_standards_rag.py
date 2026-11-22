@@ -13,6 +13,7 @@ from auth_standards_rag import (
     chunk_text,
     search_docs,
 )
+from retrieval_eval import EvaluationCase, RelevantSection, evaluate_retrieval
 
 
 class ChunkTextTests(unittest.TestCase):
@@ -109,6 +110,44 @@ class SearchDocsTests(unittest.TestCase):
     def test_rejects_out_of_range_top_k(self) -> None:
         with self.assertRaises(ValueError):
             search_docs("OAuth", top_k=11)
+
+
+class RetrievalEvaluationTests(unittest.TestCase):
+    def test_computes_metrics_at_unique_section_level(self) -> None:
+        case = EvaluationCase(
+            "PKCE",
+            (
+                RelevantSection("OAuth", "Authorization Code Grant", "2.1"),
+                RelevantSection("PKCE", "Token Verification", "4.6"),
+            ),
+        )
+
+        def fake_search(query: str, top_k: int, db_path: str) -> list[dict[str, str]]:
+            return [
+                {"source_name": "OAuth", "section_number": "2.1", "section_title": "Authorization Code Grant"},
+                {"source_name": "OAuth", "section_number": "2.1", "section_title": "Authorization Code Grant"},
+                {"source_name": "PKCE", "section_number": "4.6", "section_title": "Token Verification"},
+            ][:top_k]
+
+        report = evaluate_retrieval(top_k=3, cases=(case,), search=fake_search)
+
+        self.assertEqual(1.0, report["metrics"]["hit_rate_at_k"])
+        self.assertEqual(1.0, report["metrics"]["mean_reciprocal_rank_at_k"])
+        self.assertEqual(1.0, report["metrics"]["mean_recall_at_k"])
+        self.assertEqual([1, 2], [item["rank"] for item in report["results"][0]["relevant_sections_found"]])
+
+    def test_reports_misses_and_rejects_empty_benchmark(self) -> None:
+        case = EvaluationCase("missing", (RelevantSection("NIST", "Authentication"),))
+        report = evaluate_retrieval(
+            top_k=2,
+            cases=(case,),
+            search=lambda query, top_k, db_path: [],
+        )
+
+        self.assertEqual(0.0, report["metrics"]["hit_rate_at_k"])
+        self.assertEqual(0.0, report["metrics"]["mean_reciprocal_rank_at_k"])
+        with self.assertRaises(ValueError):
+            evaluate_retrieval(cases=(), search=lambda query, top_k, db_path: [])
 
 
 if __name__ == "__main__":
