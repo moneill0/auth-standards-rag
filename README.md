@@ -1,2 +1,57 @@
 # auth-standards-rag
-RAG assistant over OAuth 2.0, OIDC and NIST 800-63 with cited answers and abstention evaluation.
+
+A small, local retrieval starter for OAuth 2.0, OpenID Connect, and NIST digital
+identity standards. It fetches nine public sources, chunks their text, and
+indexes the passages with SQLite FTS5; no embedding service or API key is
+required.
+
+## Index the sources
+
+From this directory, run:
+
+```bash
+python -m auth_standards_rag index
+```
+
+The script downloads the sources in `SOURCES` and writes the local index to
+`data/standards.sqlite3`. Run the command again to refresh the corpus. If a
+source cannot be fetched, indexing fails with the source name and URL rather
+than silently creating an incomplete index.
+
+The corpus includes RFC 6749, RFC 9700, RFC 7636, RFC 9449, OpenID Connect Core
+1.0, and all four NIST SP 800-63 Revision 4 volumes: SP 800-63, 63A, 63B, and
+63C. OpenID Connect Core is an OpenID Foundation specification, not an RFC.
+
+RFC page footer lines are removed, RFC section headings are parsed from the
+plain-text documents, and HTML headings provide section titles and available
+section numbers. Each indexed passage records its source version, UTC fetch
+timestamp, SHA-256 hash of the fetched response, and section number/title where
+available. Rebuilding the index replaces its passage table and refreshes this
+metadata. The hash identifies the exact fetched response, but the project does
+not archive fetched source files; retrieving the same upstream revision is
+still necessary to reproduce the complete corpus later.
+
+## Search
+
+```bash
+python -m auth_standards_rag search "when should clients use PKCE?" --top-k 5
+```
+
+The `search_docs(query, top_k=5)` function is the single retrieval tool. It
+returns a list of passages with `source_name`, official `source_url`,
+`source_version`, `fetched_at`, `content_sha256`, `section_number`,
+`section_title`, and `passage`. Section numbers may be absent for headings
+that have no explicit number in the source.
+`SEARCH_DOCS_TOOL` provides a JSON-schema-style tool description for an agent
+host to register; the search function itself remains usable without choosing a
+particular LLM or agent SDK.
+
+This starter uses keyword/full-text ranking, not embeddings. Treat results as
+retrieval evidence rather than a complete compliance answer, and check the
+linked standard text for normative requirements.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
